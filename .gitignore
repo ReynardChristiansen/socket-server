@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Secrets — .env.example tetap ikut commit
+.env
+.env*.local
+.env.development
+.env.production
+!.env.example
+
+# Vercel
+.vercel/
+
+# Build output
+dist/
+build/
+out/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# Tooling & AI assistant
+CLAUDE.md
+.claude/
+.cursor/
+.cursorrules
+.aider*
+.github/copilot-instructions.md
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs & coverage
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+coverage/

@@ -1,0 +1,21 @@
+{
+  "name": "socket-project",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WebSocket chat server di Vercel Functions (ws + Redis pub/sub)",
+  "scripts": {
+    "dev": "vercel dev",
+    "typecheck": "tsc --noEmit",
+    "deploy": "vercel",
+    "deploy:prod": "vercel --prod"
+  },
+  "dependencies": {
+    "redis": "^4.7.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2"
+  }
+}
