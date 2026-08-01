@@ -1,14 +1,14 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
     <meta name="theme-color" content="#08080c" />
     <meta
       name="description"
-      content="Territory — game rebut wilayah multiplayer realtime di atas WebSocket."
+      content="Territory — a realtime multiplayer land grab game running on WebSockets."
     />
-    <title>Territory — rebut wilayah</title>
+    <title>Territory — claim the map</title>
     <link rel="stylesheet" href="/style.css" />
     <link
       rel="icon"
@@ -18,19 +18,18 @@
   <body>
     <canvas id="stage"></canvas>
 
-    <!-- HUD -->
     <div id="hud" class="hud" hidden>
       <div class="panel panel-score">
         <div class="score-value"><span id="scoreValue">0.00</span><span class="unit">%</span></div>
         <div class="score-meta">
-          <span id="scoreRank">peringkat —</span>
+          <span id="scoreRank">rank —</span>
           <span class="dot-sep"></span>
-          <span id="scoreKills">0 tumbang</span>
+          <span id="scoreKills">0 taken down</span>
         </div>
       </div>
 
       <div class="panel panel-board">
-        <h2>Papan Skor</h2>
+        <h2>Leaderboard</h2>
         <ol id="board" class="board"></ol>
       </div>
 
@@ -38,16 +37,14 @@
         <canvas id="minimap" width="120" height="120"></canvas>
       </div>
 
-      <div id="status" class="status"><span class="dot"></span><span id="statusText">menyambung</span></div>
+      <div id="status" class="status"><span class="dot"></span><span id="statusText">connecting</span></div>
     </div>
 
-    <!-- Kontrol sentuh -->
     <div id="stick" class="stick" hidden>
       <div class="stick-base"></div>
       <div class="stick-knob"></div>
     </div>
 
-    <!-- Layar awal -->
     <div id="start" class="overlay">
       <div class="card">
         <div class="brand">
@@ -55,8 +52,8 @@
           <h1>TERRITORY</h1>
         </div>
         <p class="tagline">
-          Keluar dari wilayahmu, lingkari tanah kosong, lalu pulang untuk merebutnya.
-          Jangan sampai ada yang menyentuh jejakmu.
+          Leave your land, loop around open ground, then make it home to claim it.
+          If anyone touches your trail on the way, you lose everything.
         </p>
 
         <form id="joinForm" class="join">
@@ -64,12 +61,12 @@
             id="nameInput"
             type="text"
             maxlength="14"
-            placeholder="nama kamu"
+            placeholder="your name"
             autocomplete="off"
             spellcheck="false"
-            aria-label="Nama pemain"
+            aria-label="Player name"
           />
-          <button id="playBtn" type="submit">Main</button>
+          <button id="playBtn" type="submit">Play</button>
         </form>
 
         <p id="startError" class="start-error" hidden></p>
@@ -77,33 +74,32 @@
         <div class="how">
           <div class="how-item">
             <span class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span>
-            <span>atau tombol panah</span>
+            <span>or the arrow keys</span>
           </div>
           <div class="how-item how-touch">
-            <span class="keys"><span class="pill">geser</span></span>
-            <span>di mana saja untuk berbelok</span>
+            <span class="keys"><span class="pill">drag</span></span>
+            <span>anywhere to steer</span>
           </div>
         </div>
 
         <div class="best">
-          <h2>Rekor Sepanjang Masa</h2>
+          <h2>All-time best</h2>
           <ol id="bestList" class="board board-best">
-            <li class="empty">belum ada rekor</li>
+            <li class="empty">no records yet</li>
           </ol>
         </div>
       </div>
     </div>
 
-    <!-- Layar mati -->
     <div id="dead" class="overlay overlay-dead" hidden>
       <div class="card card-dead">
-        <h2 id="deadTitle">Wilayahmu hilang</h2>
-        <p id="deadReason" class="dead-reason">Jejakmu terputus.</p>
+        <h2 id="deadTitle">Your land is gone</h2>
+        <p id="deadReason" class="dead-reason">Your trail was broken.</p>
         <div class="dead-stats">
-          <div><strong id="deadScore">0.00%</strong><span>wilayah terluas</span></div>
-          <div><strong id="deadKills">0</strong><span>lawan tumbang</span></div>
+          <div><strong id="deadScore">0.00%</strong><span>largest area</span></div>
+          <div><strong id="deadKills">0</strong><span>taken down</span></div>
         </div>
-        <p class="dead-count">Lahir kembali dalam <span id="deadCount">3</span></p>
+        <p class="dead-count">Respawning in <span id="deadCount">3</span></p>
       </div>
     </div>
 

@@ -1,4 +1,4 @@
-/* Game ini sengaja gelap saja — arena terang membuat warna pemain sulit dibedakan. */
+/* Dark only, on purpose: on a light arena the player colours stop being distinct. */
 :root {
   --bg: #08080c;
   --bg-soft: #0f1018;
@@ -19,9 +19,9 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* Aturan `display` di kelas mengalahkan [hidden] bawaan browser karena
-   specificity-nya sama tapi berasal dari author stylesheet. Tanpa baris ini,
-   overlay dan HUD yang disembunyikan lewat atribut hidden tetap tampil. */
+/* A `display` rule on a class beats the browser's own [hidden] rule: same
+   specificity, but author styles win. Without this line every overlay and HUD
+   hidden through the hidden attribute stays on screen. */
 [hidden] {
   display: none !important;
 }
@@ -52,7 +52,7 @@ body {
   touch-action: none;
 }
 
-/* ------------------------------------------------------------------ panel */
+/* ------------------------------------------------------------------- panels */
 
 .panel {
   background: var(--panel);
@@ -171,6 +171,17 @@ body {
   white-space: nowrap;
 }
 
+.board .tag {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.09);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .board .val {
   color: var(--muted);
   font-size: 12px;
@@ -188,8 +199,8 @@ body {
 .panel-map {
   grid-column: 1;
   grid-row: 3;
-  /* Tanpa ini panel ikut melebar mengikuti kolom, jadi jauh lebih besar
-     daripada peta di dalamnya. */
+  /* Without this the panel stretches to the grid column and ends up far wider
+     than the map inside it. */
   justify-self: start;
   align-self: end;
   padding: 8px;
@@ -235,7 +246,7 @@ body {
   background: var(--danger);
 }
 
-/* --------------------------------------------------------------- overlay */
+/* ----------------------------------------------------------------- overlays */
 
 .overlay {
   position: fixed;
@@ -389,7 +400,7 @@ kbd,
   font-weight: 600;
 }
 
-/* Petunjuk kontrol menyesuaikan perangkat, bukan lebar layar. */
+/* The control hint follows the input device, not the screen width. */
 .how-touch {
   display: none;
 }
@@ -403,7 +414,7 @@ kbd,
   }
 }
 
-/* ------------------------------------------------------------ layar mati */
+/* --------------------------------------------------------------- death card */
 
 .overlay-dead {
   background: rgba(6, 6, 10, 0.6);
@@ -459,7 +470,7 @@ kbd,
   font-weight: 700;
 }
 
-/* ---------------------------------------------------------------- joystick */
+/* ----------------------------------------------------------------- joystick */
 
 .stick {
   position: fixed;
@@ -496,7 +507,23 @@ kbd,
   opacity: 1;
 }
 
-/* --------------------------------------------------------------- responsif */
+/* ---------------------------------------------------------------- responsive */
+
+/* Backdrop blur has to recomposite every frame over a canvas that never stops
+   repainting. On phones that alone costs more than the whole game loop. */
+@media (hover: none) and (pointer: coarse) {
+  .panel,
+  .status {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(14, 15, 24, 0.82);
+  }
+  .overlay {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(6, 6, 10, 0.93);
+  }
+}
 
 @media (max-width: 560px) {
   .hud {
@@ -514,8 +541,8 @@ kbd,
   .panel-score {
     min-width: 0;
   }
-  /* Peta tetap di kiri bawah, cuma diperkecil. Menaruhnya di tengah atas tidak
-     muat: kolom tengah tersisa ~70px sementara peta butuh 76px. */
+  /* The map stays bottom left, just smaller. Moving it to the top centre does
+     not fit: that column has ~70px left while the map needs 76px. */
   #minimap {
     width: 64px;
     height: 64px;

@@ -9,8 +9,8 @@ function warnLocalOnly(): void {
   if (warned) return;
   warned = true;
   console.warn(
-    '[bus] REDIS_URL tidak diset — broadcast hanya sampai ke koneksi di instance ini. ' +
-      'Cukup untuk dev satu proses, TIDAK cukup untuk production.',
+    '[bus] REDIS_URL is not set — messages only reach sockets on this instance. ' +
+      'Fine for single-process development, not enough for production.',
   );
 }
 
@@ -22,13 +22,13 @@ function dispatch(channel: string, raw: string): void {
   try {
     payload = JSON.parse(raw);
   } catch {
-    console.error(`[bus] payload bukan JSON di channel ${channel}`);
+    console.error(`[bus] payload on ${channel} was not JSON`);
     return;
   }
   for (const handler of set) handler(payload);
 }
 
-/** Instance ini mulai mendengarkan channel. Dipanggil saat koneksi pertama masuk room. */
+/** Start listening on a channel. Called when the first player needs it. */
 export async function subscribe(channel: string, handler: Handler): Promise<void> {
   let set = handlers.get(channel);
   if (!set) {
@@ -42,7 +42,6 @@ export async function subscribe(channel: string, handler: Handler): Promise<void
   set.add(handler);
 }
 
-/** Dipanggil saat koneksi lokal terakhir di room itu putus. */
 export async function unsubscribe(channel: string, handler: Handler): Promise<void> {
   const set = handlers.get(channel);
   if (!set) return;
@@ -58,10 +57,9 @@ export async function unsubscribe(channel: string, handler: Handler): Promise<vo
 }
 
 /**
- * Satu-satunya jalan keluar untuk pesan antar user.
- * Instance yang menerima pesan mem-publish ke Redis, lalu SEMUA instance
- * (termasuk instance ini sendiri) menerimanya lewat subscribe dan meneruskan
- * ke koneksi lokalnya masing-masing.
+ * The only route messages take between users. The receiving instance publishes
+ * to Redis, and every instance — including this one — gets it back through its
+ * subscription and forwards it to its own sockets.
  */
 export async function publish(channel: string, payload: unknown): Promise<void> {
   const raw = JSON.stringify(payload);

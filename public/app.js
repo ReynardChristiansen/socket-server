@@ -1,5 +1,13 @@
-// Client Territory. Server yang memutuskan segalanya; di sini cuma menggambar
-// dan mengirim arah. Posisi diinterpolasi supaya 10 tick per detik terlihat halus.
+// Territory client. The server decides everything; this file only draws and
+// sends directions.
+//
+// Two details keep motion readable at ten server steps per second:
+//
+//   1. Heads are eased toward the authoritative cell with a short time
+//      constant instead of being interpolated across a whole tick. That halves
+//      the visual delay behind the server and rounds off corners.
+//   2. Trail cells are painted one tick late, so the head is always drawn ahead
+//      of its own trail rather than behind the line it is drawing.
 
 const $ = (id) => document.getElementById(id);
 
@@ -10,7 +18,13 @@ const miniCtx = minimap.getContext('2d');
 
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
-const STICK_DEADZONE = 18;
+const STICK_DEADZONE = 14;
+/** Easing time constants for head and camera motion, in milliseconds. */
+const HEAD_SMOOTH_MS = 45;
+const CAMERA_SMOOTH_MS = 90;
+/** The HUD is text; refreshing it ten times a second is wasted work on phones. */
+const HUD_INTERVAL_MS = 250;
+
 const DIR_KEYS = {
   ArrowUp: 0, KeyW: 0,
   ArrowRight: 1, KeyD: 1,
@@ -29,10 +43,10 @@ const S = {
   trails: [],
   players: new Map(),
   names: new Map(),
+  bots: new Set(),
   myId: localStorage.getItem('territory:id') || null,
   mySlot: null,
   myBest: 0,
-  lastTickAt: 0,
   camX: 50,
   camY: 50,
   camReady: false,
@@ -45,13 +59,15 @@ let reconnectDelay = RECONNECT_MIN_MS;
 let reconnectTimer = null;
 let lastSentDir = null;
 let deadUntil = 0;
+let lastFrameAt = 0;
+let hudDueAt = 0;
 
 let terr = null;
 let terrCtx = null;
 let trailLayer = null;
 let trailCtx = null;
 
-// ------------------------------------------------------------------- warna
+// ------------------------------------------------------------------------ colour
 
 function hexToRgb(hex) {
   const n = parseInt(hex.slice(1), 16);
@@ -60,9 +76,8 @@ function hexToRgb(hex) {
 
 const colorOf = (slot) => S.colors[slot % S.colors.length] || '#888';
 
-/** Jejak dibuat lebih terang dari wilayah supaya bahaya langsung terbaca —
- *  kalau warnanya sama persis, pemain tidak bisa membedakan mana yang aman
- *  dipijak dan mana yang mematikan. */
+/** Trails are lighter than territory so danger reads at a glance — in the same
+ *  colour there is no way to tell safe ground from a lethal line. */
 function lighten(hex, amount) {
   const [r, g, b] = hexToRgb(hex);
   const mix = (v) => Math.round(v + (255 - v) * amount);
@@ -71,7 +86,7 @@ function lighten(hex, amount) {
 
 const trailColorOf = (slot) => S.trailColors[slot % S.trailColors.length] || '#bbb';
 
-// -------------------------------------------------------------------- grid
+// -------------------------------------------------------------------------- grid
 
 function initGrid(w, h, maxPlayers) {
   S.w = w;
@@ -101,8 +116,8 @@ function paintOwner(idx, slot) {
   }
 }
 
-/** Gambar ulang seluruh wilayah sekaligus lewat ImageData — jauh lebih cepat
- *  daripada 10.000 kali fillRect saat baru masuk atau reconnect. */
+/** Repaints the whole territory in one pass. Far cheaper than ten thousand
+ *  fillRect calls when joining or reconnecting. */
 function repaintTerritory() {
   const image = terrCtx.createImageData(S.w, S.h);
   const data = image.data;
@@ -120,10 +135,8 @@ function repaintTerritory() {
 }
 
 function paintTrail(idx, slot) {
-  const x = idx % S.w;
-  const y = (idx / S.w) | 0;
   trailCtx.fillStyle = trailColorOf(slot);
-  trailCtx.fillRect(x, y, 1, 1);
+  trailCtx.fillRect(idx % S.w, (idx / S.w) | 0, 1, 1);
 }
 
 function clearTrail(slot) {
@@ -131,6 +144,8 @@ function clearTrail(slot) {
   if (!cells) return;
   for (const idx of cells) trailCtx.clearRect(idx % S.w, (idx / S.w) | 0, 1, 1);
   cells.clear();
+  const player = S.players.get(slot);
+  if (player) player.pendingTrail = null;
 }
 
 function rleDecode(data, out) {
@@ -141,21 +156,21 @@ function rleDecode(data, out) {
   }
 }
 
-// ---------------------------------------------------------------- jaringan
+// ---------------------------------------------------------------------- network
 
 function connect() {
   clearTimeout(reconnectTimer);
-  setStatus('menyambung', '');
+  setStatus('connecting', '');
 
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   socket = new WebSocket(`${proto}//${location.host}/api/ws`);
 
   socket.addEventListener('open', () => {
     reconnectDelay = RECONNECT_MIN_MS;
-    setStatus('tersambung', 'online');
+    setStatus('connected', 'online');
     lastSentDir = null;
-    // Kirim ulang identitas: server memakai id yang sama untuk melanjutkan
-    // wilayah yang tadi, bukan menganggap ini pemain baru.
+    // Send the same identity back: the server resumes the old territory rather
+    // than treating this as a brand new player.
     if (S.joined) sendJoin();
   });
 
@@ -170,7 +185,7 @@ function connect() {
   });
 
   socket.addEventListener('close', () => {
-    setStatus(`putus, ulangi ${Math.round(reconnectDelay / 1000)}s`, 'offline');
+    setStatus(`lost, retrying in ${Math.round(reconnectDelay / 1000)}s`, 'offline');
     reconnectTimer = setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
   });
@@ -208,10 +223,13 @@ function handle(msg) {
 
     case 'roster':
       S.names.clear();
+      S.bots.clear();
       for (const p of msg.players) {
         S.names.set(p.slot, p.name);
+        if (p.bot) S.bots.add(p.slot);
         if (p.id === S.myId) S.mySlot = p.slot;
       }
+      hudDueAt = 0;
       return;
 
     case 'best':
@@ -219,13 +237,24 @@ function handle(msg) {
       return;
 
     case 'full':
-      showStartError('Arena sedang penuh. Coba lagi sebentar lagi.');
+      showStartError('The arena is full right now. Try again in a moment.');
       return;
 
     case 'err':
       showStartError(msg.msg);
       return;
   }
+}
+
+function newPlayer(slot, x, y, dir, alive, cells, kills) {
+  return {
+    slot, x, y, dir, alive, cells, kills,
+    // Rendered position, eased toward the authoritative cell every frame.
+    rx: x,
+    ry: y,
+    // Cell recorded last tick, painted one tick late so the head stays in front.
+    pendingTrail: null,
+  };
 }
 
 function applySnapshot(msg) {
@@ -236,25 +265,26 @@ function applySnapshot(msg) {
   for (const set of S.trails) set.clear();
   S.players.clear();
   S.names.clear();
+  S.bots.clear();
   S.mySlot = null;
 
   for (const p of msg.players) {
     S.names.set(p.slot, p.name);
+    if (p.bot) S.bots.add(p.slot);
     if (p.id === S.myId) S.mySlot = p.slot;
-    S.players.set(p.slot, {
-      slot: p.slot,
-      x: p.x,
-      y: p.y,
-      px: p.x,
-      py: p.y,
-      dir: p.dir,
-      alive: p.alive,
-      cells: p.cells,
-      kills: 0,
-    });
-    for (const idx of p.trail) {
-      S.trails[p.slot].add(idx);
-      paintTrail(idx, p.slot);
+
+    const player = newPlayer(p.slot, p.x, p.y, p.dir, p.alive, p.cells, 0);
+    S.players.set(p.slot, player);
+
+    // The newest trail cell is the one the head stands on, so hold it back a
+    // tick instead of drawing a line in front of the player.
+    for (let i = 0; i < p.trail.length; i++) {
+      if (i === p.trail.length - 1) {
+        player.pendingTrail = p.trail[i];
+      } else {
+        S.trails[p.slot].add(p.trail[i]);
+        paintTrail(p.trail[i], p.slot);
+      }
     }
   }
 
@@ -265,9 +295,8 @@ function applySnapshot(msg) {
     S.camReady = true;
   }
 
-  S.lastTickAt = performance.now();
   if (!S.playing) startPlaying();
-  updateHud();
+  hudDueAt = 0;
 }
 
 function applyTick(msg) {
@@ -304,13 +333,15 @@ function applyTick(msg) {
     seen.add(slot);
     let p = S.players.get(slot);
     if (!p) {
-      p = { slot, x, y, px: x, py: y, dir, alive: !!alive, cells, kills };
+      p = newPlayer(slot, x, y, dir, !!alive, cells, kills);
       S.players.set(slot, p);
     } else {
-      // Lompatan jauh berarti lahir kembali, bukan gerak — jangan diinterpolasi.
-      const jumped = Math.abs(x - p.x) + Math.abs(y - p.y) > 2;
-      p.px = jumped ? x : p.x;
-      p.py = jumped ? y : p.y;
+      // A long jump means a respawn, not movement, so do not glide across it.
+      if (Math.abs(x - p.x) + Math.abs(y - p.y) > 2) {
+        p.rx = x;
+        p.ry = y;
+        p.pendingTrail = null;
+      }
       p.x = x;
       p.y = y;
       p.dir = dir;
@@ -320,11 +351,15 @@ function applyTick(msg) {
     }
 
     if (alive) {
-      const idx = y * S.w + x;
-      if (S.owner[idx] !== slot && !S.trails[slot].has(idx)) {
-        S.trails[slot].add(idx);
-        paintTrail(idx, slot);
+      // Paint the cell recorded last tick, then hold the current one back.
+      if (p.pendingTrail !== null && S.owner[p.pendingTrail] !== slot) {
+        S.trails[slot].add(p.pendingTrail);
+        paintTrail(p.pendingTrail, slot);
       }
+      const idx = y * S.w + x;
+      p.pendingTrail = S.owner[idx] === slot ? null : idx;
+    } else {
+      p.pendingTrail = null;
     }
   }
 
@@ -345,15 +380,12 @@ function applyTick(msg) {
       S.camReady = true;
     }
   }
-
-  S.lastTickAt = performance.now();
-  updateHud();
 }
 
-// ------------------------------------------------------------------ tampilan
+// --------------------------------------------------------------------- rendering
 
-/** Berapa sel yang muat di sisi terpanjang layar. Dihitung dari sisi terpanjang,
- *  bukan terpendek, supaya di monitor lebar arenanya tidak terlihat terlalu jauh. */
+/** How many cells fit along the longest edge. Measured on the longest edge, not
+ *  the shortest, or the arena looks far too zoomed out on wide monitors. */
 function viewSpan() {
   return matchMedia('(pointer: coarse)').matches ? 32 : 52;
 }
@@ -371,22 +403,28 @@ function frame(now) {
   requestAnimationFrame(frame);
   if (!S.w) return;
 
-  const alpha = Math.min(1, (now - S.lastTickAt) / S.tickMs);
+  const dt = lastFrameAt === 0 ? 16 : Math.min(100, now - lastFrameAt);
+  lastFrameAt = now;
+
+  const headEase = 1 - Math.exp(-dt / HEAD_SMOOTH_MS);
+  for (const p of S.players.values()) {
+    p.rx += (p.x - p.rx) * headEase;
+    p.ry += (p.y - p.ry) * headEase;
+  }
+
   const me = S.players.get(S.mySlot);
   if (me) {
-    // Kamera ikut posisi terinterpolasi, lalu dihaluskan lagi supaya tidak kaku.
-    const tx = me.px + (me.x - me.px) * alpha;
-    const ty = me.py + (me.y - me.py) * alpha;
-    S.camX += (tx - S.camX) * 0.25;
-    S.camY += (ty - S.camY) * 0.25;
+    const camEase = 1 - Math.exp(-dt / CAMERA_SMOOTH_MS);
+    S.camX += (me.rx - S.camX) * camEase;
+    S.camY += (me.ry - S.camY) * camEase;
   }
 
   const w = stage.clientWidth;
   const h = stage.clientHeight;
   const cell = Math.max(w, h) / viewSpan();
 
-  // Kamera ditahan di dalam arena. Tanpa ini, pemain yang bermain dekat tepi
-  // melihat sebagian besar layarnya jadi ruang hitam kosong di luar papan.
+  // Hold the camera inside the arena. Without this, anyone playing near an edge
+  // watches most of their screen turn into empty black space off the board.
   const viewW = w / cell;
   const viewH = h / cell;
   const camX = viewW >= S.w ? S.w / 2 : clamp(S.camX, viewW / 2 - 0.5, S.w - viewW / 2 - 0.5);
@@ -411,17 +449,19 @@ function frame(now) {
 
   if (cell >= 13) drawGridLines(originX, originY, cell, w, h);
 
-  // Jejak digambar lebih menyala supaya bahaya terlihat jelas.
-  ctx.globalAlpha = 0.95;
   ctx.drawImage(trailLayer, originX, originY, boardW, boardH);
-  ctx.globalAlpha = 1;
 
   ctx.strokeStyle = 'rgba(255,255,255,0.22)';
   ctx.lineWidth = 2;
   ctx.strokeRect(originX, originY, boardW, boardH);
 
-  drawPlayers(originX, originY, cell, alpha);
+  drawPlayers(originX, originY, cell);
   drawMinimap();
+
+  if (now >= hudDueAt) {
+    hudDueAt = now + HUD_INTERVAL_MS;
+    updateHud();
+  }
 }
 
 function drawGridLines(originX, originY, cell, w, h) {
@@ -445,17 +485,15 @@ function drawGridLines(originX, originY, cell, w, h) {
   ctx.stroke();
 }
 
-function drawPlayers(originX, originY, cell, alpha) {
+function drawPlayers(originX, originY, cell) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
 
   for (const p of S.players.values()) {
     if (!p.alive) continue;
 
-    const ix = p.px + (p.x - p.px) * alpha;
-    const iy = p.py + (p.y - p.py) * alpha;
-    const sx = originX + ix * cell;
-    const sy = originY + iy * cell;
+    const sx = originX + p.rx * cell;
+    const sy = originY + p.ry * cell;
     const isMe = p.slot === S.mySlot;
     const size = cell * (isMe ? 1.5 : 1.3);
 
@@ -479,7 +517,7 @@ function drawPlayers(originX, originY, cell, alpha) {
       ctx.strokeStyle = 'rgba(0,0,0,0.75)';
       ctx.lineWidth = 3;
       ctx.lineJoin = 'round';
-      const label = isMe ? `${name} (kamu)` : name;
+      const label = isMe ? `${name} (you)` : name;
       ctx.strokeText(label, sx + cell / 2, sy - cell * 0.35);
       ctx.fillText(label, sx + cell / 2, sy - cell * 0.35);
     }
@@ -508,11 +546,11 @@ function drawMinimap() {
   const scale = size / S.w;
   miniCtx.fillStyle = '#fff';
   miniCtx.beginPath();
-  miniCtx.arc(me.x * scale, me.y * scale, 2.5, 0, Math.PI * 2);
+  miniCtx.arc(me.rx * scale, me.ry * scale, 2.5, 0, Math.PI * 2);
   miniCtx.fill();
 }
 
-// --------------------------------------------------------------------- HUD
+// -------------------------------------------------------------------------- HUD
 
 function updateHud() {
   const total = S.w * S.h;
@@ -521,12 +559,11 @@ function updateHud() {
 
   $('scoreValue').textContent = me ? ((me.cells / total) * 100).toFixed(2) : '0.00';
   $('scoreRank').textContent = me
-    ? `peringkat ${rows.findIndex((p) => p.slot === S.mySlot) + 1} dari ${rows.length}`
-    : 'menonton';
-  $('scoreKills').textContent = `${me?.kills ?? 0} tumbang`;
+    ? `rank ${rows.findIndex((p) => p.slot === S.mySlot) + 1} of ${rows.length}`
+    : 'spectating';
+  $('scoreKills').textContent = `${me?.kills ?? 0} taken down`;
 
-  const board = $('board');
-  board.replaceChildren(
+  $('board').replaceChildren(
     ...rows.slice(0, 5).map((p) => {
       const li = document.createElement('li');
       if (p.slot === S.mySlot) li.className = 'me';
@@ -540,11 +577,18 @@ function updateHud() {
       who.className = 'who';
       who.textContent = S.names.get(p.slot) || '—';
 
+      li.append(swatch, who);
+      if (S.bots.has(p.slot)) {
+        const tag = document.createElement('span');
+        tag.className = 'tag';
+        tag.textContent = 'bot';
+        li.append(tag);
+      }
+
       const val = document.createElement('span');
       val.className = 'val';
       val.textContent = `${((p.cells / total) * 100).toFixed(2)}%`;
-
-      li.append(swatch, who, val);
+      li.append(val);
       return li;
     }),
   );
@@ -554,10 +598,10 @@ function renderBest(rows) {
   const total = S.w * S.h || 10000;
   const list = $('bestList');
   if (!rows || rows.length === 0) {
-    list.replaceChildren(Object.assign(document.createElement('li'), {
-      className: 'empty',
-      textContent: 'belum ada rekor',
-    }));
+    const empty = document.createElement('li');
+    empty.className = 'empty';
+    empty.textContent = 'no records yet';
+    list.replaceChildren(empty);
     return;
   }
   list.replaceChildren(
@@ -565,7 +609,8 @@ function renderBest(rows) {
       const li = document.createElement('li');
       const rank = document.createElement('span');
       rank.className = 'swatch';
-      rank.style.background = ['#fbbf24', '#cbd5e1', '#b45309', '#3f3f46', '#3f3f46'][i] || '#3f3f46';
+      rank.style.background =
+        ['#fbbf24', '#cbd5e1', '#b45309', '#3f3f46', '#3f3f46'][i] || '#3f3f46';
       const who = document.createElement('span');
       who.className = 'who';
       who.textContent = row.name;
@@ -606,8 +651,8 @@ function onDeath(death) {
   $('deadKills').textContent = String(me?.kills ?? 0);
   $('deadReason').textContent =
     death.killer !== null && death.killer !== S.mySlot
-      ? `Dijegal ${S.names.get(death.killer) || 'lawan'}.`
-      : 'Jejakmu terputus.';
+      ? `${S.names.get(death.killer) || 'Someone'} cut your trail.`
+      : 'Your trail was broken.';
 
   S.myBest = 0;
   deadUntil = performance.now() + 3000;
@@ -627,7 +672,7 @@ function hideDead() {
   $('dead').hidden = true;
 }
 
-// ------------------------------------------------------------------ kontrol
+// ---------------------------------------------------------------------- controls
 
 function sendDir(dir) {
   if (dir === lastSentDir) return;
@@ -663,8 +708,8 @@ stage.addEventListener('pointermove', (event) => {
   const dy = event.clientY - stickOrigin.y;
   const dist = Math.hypot(dx, dy);
 
-  const clamped = Math.min(dist, 46);
   const angle = Math.atan2(dy, dx);
+  const clamped = Math.min(dist, 46);
   placeStick(
     stickKnob,
     stickOrigin.x + Math.cos(angle) * clamped,
@@ -690,7 +735,7 @@ function placeStick(el, x, y) {
   el.style.top = `${y}px`;
 }
 
-// ------------------------------------------------------------------- mulai
+// ------------------------------------------------------------------------ start
 
 $('joinForm').addEventListener('submit', (event) => {
   event.preventDefault();

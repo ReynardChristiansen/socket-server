@@ -10,10 +10,10 @@ import {
 
 export type Dir = 0 | 1 | 2 | 3;
 
-const DX = [0, 1, 0, -1] as const;
-const DY = [-1, 0, 1, 0] as const;
+export const DX = [0, 1, 0, -1] as const;
+export const DY = [-1, 0, 1, 0] as const;
 
-const isOpposite = (a: Dir, b: Dir): boolean => (a + 2) % 4 === b;
+export const isOpposite = (a: Dir, b: Dir): boolean => (a + 2) % 4 === b;
 
 export type Player = {
   id: string;
@@ -24,10 +24,11 @@ export type Player = {
   dir: Dir;
   queuedDir: Dir | null;
   alive: boolean;
-  /** Sedang di luar wilayah sendiri, artinya sedang meninggalkan jejak. */
+  /** Outside its own territory, which means it is dragging a trail. */
   trailing: boolean;
-  /** Koneksi putus tapi wilayahnya masih ditahan. Tidak ikut bergerak. */
+  /** Connection dropped but territory is still held. Does not move. */
   frozen: boolean;
+  isBot: boolean;
   goneTick: number | null;
   respawnTick: number;
   kills: number;
@@ -39,9 +40,9 @@ export type ArenaEvents = {
   captures: { slot: number; cells: number[] }[];
   spawns: { slot: number; cells: number[] }[];
   deaths: { slot: number; killer: number | null }[];
-  /** Sel yang kembali netral, entah karena pemiliknya mati atau keluar. */
+  /** Cells that went back to neutral, from a death or a player leaving. */
   freed: number[];
-  /** Slot yang jejaknya harus dihapus di sisi client. */
+  /** Slots whose trail the client should erase. */
   clearTrails: number[];
   rosterChanged: boolean;
 };
@@ -50,7 +51,7 @@ export type PlayerSnapshot = Omit<Player, 'queuedDir'> & { trail: number[] };
 
 export type ArenaSnapshot = {
   tick: number;
-  /** Grid pemilik dalam bentuk run-length encoding: [nilai, jumlah, ...]. */
+  /** Owner grid, run-length encoded as [value, count, ...]. */
   owner: number[];
   players: PlayerSnapshot[];
 };
@@ -94,8 +95,8 @@ export function rleDecode(data: number[], out: Int8Array): void {
 }
 
 /**
- * Simulasi murni, tanpa jaringan dan tanpa Redis. Semua aturan permainan ada di
- * sini supaya bisa diuji sendiri tanpa menyalakan server.
+ * Pure simulation: no sockets, no Redis. Every rule of the game lives here so
+ * it can be tested without starting a server.
  */
 export class Arena {
   tick = 0;
@@ -117,10 +118,10 @@ export class Arena {
     return this.trailCells[slot];
   }
 
-  join(id: string, name: string): Player | null {
+  join(id: string, name: string, isBot = false): Player | null {
     const existing = this.players.get(id);
     if (existing) {
-      // Reconnect: lanjutkan dari kondisi terakhir, wilayahnya tidak hilang.
+      // Reconnect: pick up exactly where they left off, territory intact.
       existing.frozen = false;
       existing.goneTick = null;
       if (name) existing.name = name;
@@ -141,6 +142,7 @@ export class Arena {
       alive: false,
       trailing: false,
       frozen: false,
+      isBot,
       goneTick: null,
       respawnTick: this.tick,
       kills: 0,
@@ -152,7 +154,7 @@ export class Arena {
     return player;
   }
 
-  /** Koneksi putus. Pemain dibekukan dulu, belum dibuang. */
+  /** Connection dropped. Freeze the player rather than deleting them. */
   disconnect(id: string): void {
     const player = this.players.get(id);
     if (!player || player.goneTick !== null) return;
@@ -197,9 +199,8 @@ export class Arena {
       if (player.queuedDir !== null) {
         const wanted = player.queuedDir;
         player.queuedDir = null;
-        // Balik badan hanya dilarang saat sedang menyeret jejak, karena sel di
-        // belakang adalah jejak sendiri dan itu berarti mati seketika. Di dalam
-        // wilayah sendiri tidak ada jejak, jadi bebas ke arah mana pun.
+        // Reversing is only fatal while dragging a trail, because the cell
+        // behind is your own trail. Inside your territory there is none.
         if (!(isOpposite(player.dir, wanted) && player.trailing)) player.dir = wanted;
       }
 
@@ -212,7 +213,7 @@ export class Arena {
       nextIdx.set(player.slot, ny * GRID_W + nx);
     }
 
-    // Dua pemain menuju sel yang sama: dua-duanya mati, tidak ada yang diuntungkan.
+    // Two players entering the same cell: both die, nobody profits.
     const occupants = new Map<number, number[]>();
     for (const [slot, idx] of nextIdx) {
       const list = occupants.get(idx);
@@ -223,7 +224,7 @@ export class Arena {
       if (slots.length > 1) for (const slot of slots) dying.set(slot, null);
     }
 
-    // Menabrak jejak: yang mati pemilik jejaknya, bukan yang menabrak.
+    // Touching a trail kills the trail's owner, not whoever touched it.
     for (const [slot, idx] of nextIdx) {
       if (dying.has(slot)) continue;
       const victim = this.trail[idx];
@@ -288,7 +289,7 @@ export class Arena {
     }
   }
 
-  /** Penempatan eksplisit. Dipakai tes supaya tidak bergantung pada spawn acak. */
+  /** Explicit placement, used by tests so they do not depend on random spawns. */
   spawnAt(id: string, cx: number, cy: number): number[] {
     const player = this.players.get(id);
     if (!player) return [];
@@ -305,7 +306,7 @@ export class Arena {
       if (!this.areaIsFree(cx, cy, half)) continue;
       return this.placeAt(player, cx, cy, half);
     }
-    // Arena padat: tetap tempatkan, ambil alih sel yang ada.
+    // Crowded arena: place anyway and take over whatever is there.
     const cx = margin + Math.floor(Math.random() * (GRID_W - margin * 2));
     const cy = margin + Math.floor(Math.random() * (GRID_H - margin * 2));
     return this.placeAt(player, cx, cy, half);
@@ -336,8 +337,8 @@ export class Arena {
     player.alive = true;
     player.trailing = false;
     player.queuedDir = null;
-    // Menghadap ke sisi paling lapang. Kalau selalu menghadap kanan, pemain yang
-    // lahir dekat tepi kanan langsung melaju ke dinding sebelum sempat berbelok.
+    // Face the roomiest side. Always facing right means anyone spawning near
+    // the right wall drives straight into it before they can even turn.
     const room = [cy, GRID_W - 1 - cx, GRID_H - 1 - cy, cx];
     player.dir = room.indexOf(Math.max(...room)) as Dir;
     return cells;
@@ -389,9 +390,9 @@ export class Arena {
   }
 
   /**
-   * Pemain kembali ke wilayahnya. Jejak jadi miliknya, lalu semua sel yang
-   * terkurung ikut direbut. Caranya dibalik: banjiri dari tepi arena, apa pun
-   * yang tidak tersentuh berarti terkurung.
+   * The player made it home. The trail becomes theirs, then everything it
+   * enclosed follows. Computed backwards: flood the arena from its edges and
+   * whatever the flood never reaches must be enclosed.
    */
   private capture(player: Player): number[] {
     const slot = player.slot;
@@ -445,8 +446,13 @@ export class Arena {
     return gained;
   }
 
-  roster(): { id: string; slot: number; name: string }[] {
-    return [...this.players.values()].map((p) => ({ id: p.id, slot: p.slot, name: p.name }));
+  roster(): { id: string; slot: number; name: string; bot: boolean }[] {
+    return [...this.players.values()].map((p) => ({
+      id: p.id,
+      slot: p.slot,
+      name: p.name,
+      bot: p.isBot,
+    }));
   }
 
   scoreboard(): { slot: number; name: string; cells: number; kills: number; alive: boolean }[] {

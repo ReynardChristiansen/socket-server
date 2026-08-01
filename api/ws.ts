@@ -15,7 +15,7 @@ import {
 } from '../lib/game/constants';
 
 const PING_INTERVAL_MS = 30_000;
-/** Batas belok per detik. Menahan client nakal membakar kuota Redis. */
+/** Turn rate cap, so a misbehaving client cannot burn through Redis quota. */
 const MAX_TURNS_PER_SECOND = 15;
 
 type Client = {
@@ -28,8 +28,8 @@ type Client = {
 };
 
 /**
- * Socket yang dipegang instance ini saja. Simulasi dan skor tidak ada di sini —
- * itu milik leader dan Redis, lihat lib/game/match.ts.
+ * Sockets held by this instance only. The simulation and the scores are not
+ * here — they belong to the leader and to Redis, see lib/game/match.ts.
  */
 const clients = new Map<WebSocket, Client>();
 const byPlayerId = new Map<string, Client>();
@@ -67,11 +67,11 @@ match.onDeliver((payload, to) => {
 
 function cleanName(value: unknown): string {
   const text = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
-  if (!text) return `Pemain-${Math.floor(Math.random() * 900 + 100)}`;
+  if (!text) return `Player-${Math.floor(Math.random() * 900 + 100)}`;
   return text.slice(0, MAX_NAME_LENGTH);
 }
 
-/** Id dipakai ulang saat reconnect supaya wilayah pemain tidak hilang. */
+/** Reused on reconnect so a player does not lose their territory. */
 function cleanPlayerId(value: unknown): string {
   return typeof value === 'string' && /^[a-zA-Z0-9_-]{6,64}$/.test(value) ? value : randomUUID();
 }
@@ -82,7 +82,7 @@ function handleJoin(client: Client, payload: Record<string, unknown>): void {
   const playerId = cleanPlayerId(payload.id);
   const existing = byPlayerId.get(playerId);
   if (existing && existing !== client) {
-    send(client, { k: 'err', msg: 'Id pemain ini sedang dipakai koneksi lain' });
+    send(client, { k: 'err', msg: 'That player id is already in use by another connection' });
     client.ws.close();
     return;
   }
@@ -183,8 +183,8 @@ setInterval(() => {
 match.start();
 
 if (!redisEnabled) {
-  console.warn('[ws] REDIS_URL tidak diset — arena hanya hidup di satu proses.');
+  console.warn('[ws] REDIS_URL is not set — the arena only lives in this process.');
 }
 
-// Export instance http.Server, BUKAN handler function.
+// Export an http.Server instance, NOT a handler function.
 export default server;

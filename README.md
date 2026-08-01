@@ -1,110 +1,142 @@
 # Territory
 
-Game rebut wilayah multiplayer realtime — ala paper.io — dengan server otoritatif
-10 tick per detik yang jalan di Vercel Functions.
+A realtime multiplayer land grab game — paper.io style — with an authoritative
+server running ten simulation steps per second on Vercel Functions.
 
-Keluar dari wilayahmu, lingkari tanah kosong, lalu pulang untuk merebutnya. Kalau ada
-yang menyentuh jejakmu sebelum kamu sampai rumah, kamu kehilangan semuanya.
+Leave your land, loop around open ground, then make it home to claim it. If
+anyone touches your trail before you get back, you lose everything.
 
-## Kenapa ini tidak sesederhana kelihatannya
+## Why this is harder than it looks
 
-Vercel Functions bukan server yang hidup selamanya. Tiga batasannya bertabrakan
-langsung dengan kebutuhan sebuah game realtime, dan itu yang membentuk arsitektur di sini:
+Vercel Functions are not long-lived servers. Three of their properties collide
+head-on with what a realtime game needs, and they shaped the whole design:
 
-**Koneksi baru bisa mendarat di instance mana pun.** Dua pemain di arena yang sama belum
-tentu dilayani proses yang sama, jadi tidak ada satu pun proses yang otomatis memegang
-kebenaran tentang isi arena.
+**New connections can land on any instance.** Two players in the same arena are
+not necessarily served by the same process, so no process automatically owns the
+truth about the game.
 
-**Function mati saat mencapai max duration, 300 detik.** Simulasi tidak boleh ikut mati
-bersamanya.
+**A function is killed at its max duration, 300 seconds.** The simulation cannot
+die with it.
 
-**Koneksi pemain ikut putus saat itu terjadi.** Jadi putus koneksi bukan kasus langka
-yang boleh diabaikan — itu kejadian rutin tiap lima menit.
+**Player connections drop at that moment too.** Disconnects are not a rare edge
+case here — they happen to everyone, every five minutes.
 
-## Cara kerjanya
+## How it works
 
-Satu instance memegang kunci di Redis dan menjadi **leader**. Hanya dia yang menjalankan
-simulasi. Instance lain tidak ikut menghitung apa pun — mereka cuma meneruskan input
-pemainnya ke leader, lalu menyiarkan hasil yang datang balik ke socket miliknya sendiri.
+One instance holds a lock in Redis and becomes the **leader**. Only it runs the
+simulation. Other instances compute nothing: they forward their players' input
+to the leader and broadcast whatever comes back to their own sockets.
 
 ```
-pemain ─► instance A ─┐                        ┌─► instance A ─► pemain
+player ─► instance A ─┐                        ┌─► instance A ─► player
                       ├─► arena:in ─► LEADER ──┤
-pemain ─► instance B ─┘                simulasi└─► instance B ─► pemain
-                                       10 Hz         arena:out
+player ─► instance B ─┘                 10 Hz  └─► instance B ─► player
+                                    simulation      arena:out
 ```
 
-Kunci leader berumur 3 detik dan diperpanjang tiap detik. Kalau instance pemegangnya kena
-max duration, kuncinya kedaluwarsa sendiri, instance lain mengambil alih, memuat snapshot
-terakhir dari Redis, lalu meneruskan pertandingan. Pemain merasakan tersendat sekitar satu
-detik, bukan kehilangan arena.
+The leader lock lives for three seconds and is renewed every second. When the
+holding instance hits its max duration the lock expires by itself, another
+instance takes over, loads the last snapshot from Redis and carries on. Players
+feel about a second of stutter rather than losing the arena.
 
-Saat leader baru terpilih, dia menyiarkan `need-roster`. Setiap instance menjawab dengan
-mendaftarkan ulang pemain yang socketnya dia pegang — ini yang menutup celah pemain yang
-join tepat saat arena sedang tanpa leader.
+A fresh leader broadcasts `need-roster`. Every instance answers by re-registering
+the players whose sockets it holds, which closes the gap for anyone who joined
+while the arena had no leader at all.
 
-**Putus koneksi tidak langsung menghapus pemain.** Wilayahnya ditahan 12 detik. Karena
-client menyimpan id-nya di `localStorage` dan mengirimnya lagi saat reconnect, pemain yang
-koneksinya diputus oleh max duration akan kembali ke wilayah yang sama. Dari sisi pemain,
-game-nya tidak terasa terputus.
+**A dropped connection does not remove a player.** Their land is held for twelve
+seconds. The client keeps its id in `localStorage` and sends it again on
+reconnect, so a player cut off by the max duration comes back to the same
+territory. From their side the game never broke.
 
-**Arena kosong berhenti berdetak.** Tidak ada pemain berarti tidak ada tick, tidak ada
-command Redis, dan kunci leader dilepas. Kuota tidak terbakar saat tidak ada yang main.
+**An empty arena stops ticking.** No players means no steps, no Redis commands
+and no leader lock. Idle time costs nothing.
 
-## Apa yang dikirim tiap tick
+## What goes over the wire each tick
 
-Grid 100×100 itu 10.000 sel. Mengirim seluruhnya 10 kali per detik akan menghabiskan
-puluhan megabit per menit, jadi yang disiarkan cuma yang berubah:
+A 100×100 grid is 10,000 cells. Sending all of it ten times a second would burn
+tens of megabits a minute, so only changes are broadcast:
 
-| Isi | Kapan dikirim |
+| Payload | Sent when |
 |---|---|
-| Posisi, arah, skor semua pemain | tiap tick (~12 baris angka) |
-| Sel yang baru direbut | hanya saat ada yang merebut |
-| Sel yang jadi netral | hanya saat ada yang mati |
-| Grid penuh (RLE) | sekali, saat pemain masuk atau reconnect |
+| Every player's position, direction and score | every tick (~12 rows of numbers) |
+| Newly claimed cells | only when someone captures |
+| Cells returned to neutral | only when someone dies |
+| The full grid, run-length encoded | once, on join or reconnect |
 
-Jejak tidak dikirim sama sekali. Client menyusunnya sendiri: kalau posisi pemain berada di
-sel yang bukan miliknya, itu jejak. Server cukup memberi tahu kapan jejak harus dihapus.
+Trails are never sent. The client derives them: if a player stands on a cell they
+do not own, that cell is trail. The server only has to say when a trail is gone.
 
-## Struktur
+## Rendering
+
+Ten steps per second is choppy if drawn literally, and two details fix that:
+
+- Heads ease toward the authoritative cell with a 45ms time constant rather than
+  being interpolated across a whole tick. That halves the visual delay behind the
+  server and rounds off corners instead of snapping them.
+- Trail cells are painted one tick late, so a head is always drawn ahead of the
+  line it is drawing rather than chasing it.
+
+The remaining input delay is network round trip plus up to one tick of alignment.
+Putting the function and Redis in the region closest to your players matters far
+more here than any client-side trick.
+
+## Bots
+
+Bots keep the arena from feeling empty. They arrive when a human does and leave
+with the last one, because keeping them alive with nobody watching would hold the
+tick loop open and burn quota forever.
+
+The strategy in `lib/game/bot.ts` is deliberately plain: carve a rectangle by
+turning the same way every few cells, head home once the trail gets long, and
+never take a step that runs into a wall or its own trail. Each candidate
+direction is probed six cells ahead and scored by how far it stays survivable, so
+a bot turns before it is trapped rather than after.
+
+Someone else's trail is treated as free ground — running over it kills them, not
+the bot.
+
+## Layout
 
 ```
-lib/game/arena.ts       simulasi murni — gerak, tabrakan, rebut wilayah. Tanpa jaringan.
-lib/game/match.ts       pemilihan leader, game loop, snapshot, papan rekor
-lib/game/constants.ts   ukuran arena, tick rate, warna, kunci Redis
-lib/bus.ts              pub/sub antar instance lewat Redis
-lib/redis.ts            koneksi command dan koneksi subscriber terpisah
-api/ws.ts               WebSocket server — export instance http.Server
-public/                 client: canvas, HUD, kontrol sentuh
-test/arena.test.ts      15 tes untuk aturan permainan
+lib/game/arena.ts       pure simulation — movement, collisions, capture. No I/O.
+lib/game/bot.ts         bot steering
+lib/game/match.ts       leader election, game loop, snapshots, records
+lib/game/constants.ts   arena size, tick rate, colours, Redis keys
+lib/bus.ts              cross-instance pub/sub over Redis
+lib/redis.ts            command connection and a separate subscriber connection
+api/ws.ts               WebSocket server — exports an http.Server instance
+public/                 client: canvas, HUD, touch controls
+test/                   19 tests for the rules and the bots
 ```
 
-`arena.ts` sengaja tidak tahu apa-apa soal jaringan maupun Redis. Semua aturan permainan
-bisa diuji tanpa menyalakan server:
+`arena.ts` knows nothing about sockets or Redis, so every rule can be tested
+without starting a server:
 
 ```bash
 npm test
 ```
 
-## Aturan permainan
+## Rules
 
-- Petak awal 5×5, menghadap sisi arena yang paling lapang
-- Di luar wilayah sendiri, pemain meninggalkan jejak
-- Kembali ke wilayah sendiri → jejak jadi milikmu, dan **semua yang terkurung ikut direbut**
-- Menyentuh jejak seseorang membunuh **pemilik jejaknya**, bukan yang menyentuh
-- Menabrak jejak sendiri, tepi arena, atau bertabrakan kepala-lawan-kepala juga mematikan
-- Yang mati kehilangan seluruh wilayahnya dan lahir kembali 3 detik kemudian
-- Balik badan 180° hanya dilarang saat sedang menyeret jejak
+- You start on a 5×5 block, facing the roomiest side of the arena
+- Outside your own land you leave a trail
+- Get back onto your own land and the trail becomes yours, **along with
+  everything it enclosed**
+- Touching a trail kills **its owner**, not whoever touched it
+- Your own trail, the arena edge and head-on collisions are all fatal
+- Dying releases all your land; you respawn three seconds later
+- Reversing is only blocked while you are dragging a trail
 
-Perebutan wilayah dihitung terbalik: banjiri arena dari tepi, apa pun yang tidak tersentuh
-berarti terkurung. Satu kali flood fill untuk seluruh grid, sekitar 0,1 ms.
+Capture is computed backwards: flood the arena inward from its edges, and
+whatever the flood never reaches must be enclosed. One flood fill over the whole
+grid, roughly 0.1 ms.
 
-## Kontrol
+## Controls
 
-Papan ketik `WASD` atau tombol panah. Di layar sentuh, geser di mana saja — joystick muncul
-di titik sentuh.
+`WASD` or the arrow keys. On a touch screen, drag anywhere — the joystick appears
+under your thumb.
 
-## Jalan lokal
+## Running locally
 
 ```bash
 npm install
@@ -115,36 +147,37 @@ vercel link
 vercel dev            # http://localhost:3000
 ```
 
-Redis lokal opsional untuk dev satu proses. Tanpa `REDIS_URL`, arena tetap jalan di satu
-proses tanpa pemilihan leader dan tanpa papan rekor.
+Redis is optional for single-process development. Without `REDIS_URL` the arena
+still runs, with no leader election and no all-time records.
 
 ```bash
 docker run -d -p 6379:6379 --name territory-redis redis
-# REDIS_URL=redis://localhost:6379 di .env.local
+# REDIS_URL=redis://localhost:6379 in .env.local
 ```
 
-## Deploy
+## Deploying
 
-1. **Fluid compute harus aktif** (Settings → Functions). Tanpa ini WebSocket tidak jalan.
-2. Tambahkan Redis dari Vercel Marketplace, connect ke project. Kode membaca `REDIS_URL`
-   atau `KV_URL`.
-3. Taruh Redis di region yang sama dengan function. Simulasi menyentuh Redis 10 kali per
-   detik; kalau keduanya beda benua, game-nya terasa berat.
+1. **Fluid compute must be enabled** (Settings → Functions). WebSockets do not
+   work without it.
+2. Add Redis from the Vercel Marketplace and connect it to the project. The code
+   reads `REDIS_URL` or `KV_URL`.
+3. Put Redis in the same region as the function. The simulation touches Redis ten
+   times a second; split across continents, the game feels heavy.
 4. `vercel --prod`
 
-Cek cepat: `curl https://<domain>/api/ws` — akan menampilkan `redis`, jumlah koneksi
-lokal, dan siapa leader-nya.
+Quick check: `curl https://<domain>/api/ws` reports Redis status, local
+connection count and which instance is leading.
 
-## Konsumsi kuota
+## Quota
 
-Sekitar 40.000 command Redis per jam saat arena ramai, jadi free tier Upstash (500.000
-command per bulan) cukup untuk kira-kira 12 jam pertandingan. Arena kosong tidak memakan
-apa pun. Kalau perlu lebih hemat, turunkan tick rate di `lib/game/constants.ts` atau
-perjarang snapshot.
+Roughly 40,000 Redis commands an hour with a busy arena, so the Upstash free tier
+(500,000 commands a month) covers about twelve hours of play. An empty arena
+costs nothing. To stretch it further, lower the tick rate in
+`lib/game/constants.ts` or snapshot less often.
 
-## Catatan teknis
+## Notes
 
-`tsconfig.json` memakai `module: Node16`. Setelan gaya bundler (`ESNext` +
-`moduleResolution: Bundler`) membuat seluruh function gagal dimuat di Vercel dengan
-`FUNCTION_INVOCATION_FAILED`, karena hasil kompilasinya keluar sebagai ESM sementara
-runtime memuatnya sebagai CommonJS.
+`tsconfig.json` uses `module: Node16`. Bundler-style settings (`ESNext` with
+`moduleResolution: Bundler`) make every function fail to load on Vercel with
+`FUNCTION_INVOCATION_FAILED`, because the compiled output is ESM while the
+runtime loads it as CommonJS.

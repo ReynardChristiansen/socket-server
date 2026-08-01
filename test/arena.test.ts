@@ -13,12 +13,12 @@ function drive(arena: Arena, id: string, dir: Dir, steps: number): void {
 
 function seat(arena: Arena, id: string, x: number, y: number) {
   const player = arena.join(id, id);
-  assert.ok(player, `slot untuk ${id} harus tersedia`);
+  assert.ok(player, `a slot should be free for ${id}`);
   arena.spawnAt(id, x, y);
   return player;
 }
 
-test('spawn memberi petak 5x5 dan pemain hidup di tengahnya', () => {
+test('spawning gives a 5x5 block with the player in the middle', () => {
   const arena = new Arena();
   const player = seat(arena, 'p1', 50, 50);
 
@@ -30,64 +30,64 @@ test('spawn memberi petak 5x5 dan pemain hidup di tengahnya', () => {
   assert.equal(arena.owner[at(53, 50)], -1);
 });
 
-test('keluar wilayah meninggalkan jejak, kembali merebut area yang terkurung', () => {
+test('leaving home draws a trail, returning claims everything it enclosed', () => {
   const arena = new Arena();
   const player = seat(arena, 'p1', 50, 50);
 
-  drive(arena, 'p1', 1, 5); // ke kanan sampai (55,50)
-  assert.equal(player.trailing, true, 'harus meninggalkan jejak di luar wilayah');
+  drive(arena, 'p1', 1, 5); // right, to (55,50)
+  assert.equal(player.trailing, true, 'should be drawing a trail outside home');
   assert.ok(arena.getTrail(player.slot).length > 0);
 
-  drive(arena, 'p1', 2, 3); // turun ke (55,53)
-  drive(arena, 'p1', 3, 5); // ke kiri sampai (50,53)
-  drive(arena, 'p1', 0, 1); // naik ke (50,52), masuk wilayah sendiri lagi
+  drive(arena, 'p1', 2, 3); // down, to (55,53)
+  drive(arena, 'p1', 3, 5); // left, to (50,53)
+  drive(arena, 'p1', 0, 1); // up, back onto own land
 
-  assert.equal(player.trailing, false, 'jejak harus habis setelah kembali');
+  assert.equal(player.trailing, false, 'the trail is consumed on arrival');
   assert.equal(arena.getTrail(player.slot).length, 0);
-  assert.equal(arena.owner[at(54, 51)], player.slot, 'sel terkurung harus jadi milik pemain');
-  assert.equal(arena.owner[at(55, 50)], player.slot, 'bekas jejak harus jadi milik pemain');
-  assert.ok(arena.counts[player.slot] > 25, 'wilayah harus bertambah dari 25');
+  assert.equal(arena.owner[at(54, 51)], player.slot, 'enclosed cells change hands');
+  assert.equal(arena.owner[at(55, 50)], player.slot, 'the old trail becomes land');
+  assert.ok(arena.counts[player.slot] > 25, 'territory should grow past 25');
 });
 
-test('menabrak jejak lawan membunuh pemilik jejaknya, bukan penabraknya', () => {
+test('touching a trail kills its owner, not whoever touched it', () => {
   const arena = new Arena();
   const hunted = seat(arena, 'p1', 20, 20);
-  drive(arena, 'p1', 1, 6); // jejak p1 terbentang di y=20
+  drive(arena, 'p1', 1, 6); // p1 lays a trail along y=20
 
   const hunter = seat(arena, 'p2', 26, 24);
-  drive(arena, 'p2', 0, 4); // naik menembus jejak p1 di (26,20)
+  drive(arena, 'p2', 0, 4); // walks up through p1's trail at (26,20)
 
-  assert.equal(hunted.alive, false, 'pemilik jejak yang mati');
-  assert.equal(hunter.alive, true, 'penabrak selamat');
+  assert.equal(hunted.alive, false, 'the trail owner dies');
+  assert.equal(hunter.alive, true, 'whoever touched it survives');
   assert.equal(hunter.kills, 1);
-  assert.equal(arena.counts[hunted.slot], 0, 'wilayah yang mati harus dibebaskan');
+  assert.equal(arena.counts[hunted.slot], 0, 'a dead player releases their land');
 });
 
-test('menabrak jejak sendiri berarti mati sendiri', () => {
+test('running into your own trail is fatal', () => {
   const arena = new Arena();
   const player = seat(arena, 'p1', 50, 50);
 
-  drive(arena, 'p1', 0, 8); // naik jauh sampai (50,42), jejak sepanjang x=50
-  drive(arena, 'p1', 1, 3); // ke kanan  (53,42)
-  drive(arena, 'p1', 2, 3); // turun     (53,45)
-  drive(arena, 'p1', 3, 3); // ke kiri, memotong jejaknya sendiri di (50,45)
+  drive(arena, 'p1', 0, 8); // up to (50,42), trail along x=50
+  drive(arena, 'p1', 1, 3); // right to (53,42)
+  drive(arena, 'p1', 2, 3); // down to (53,45)
+  drive(arena, 'p1', 3, 3); // left, crossing its own trail at (50,45)
 
   assert.equal(player.alive, false);
   assert.equal(player.deaths, 1);
-  assert.equal(player.kills, 0, 'bunuh diri tidak dihitung kill');
+  assert.equal(player.kills, 0, 'suicide is not a kill');
 });
 
-test('menabrak tepi arena mematikan', () => {
+test('hitting the edge of the arena is fatal', () => {
   const arena = new Arena();
   const player = seat(arena, 'p1', 2, 50);
 
-  drive(arena, 'p1', 3, 3); // x: 1, 0, lalu -1
+  drive(arena, 'p1', 3, 3); // x goes 1, 0, then off the board
 
   assert.equal(player.alive, false);
   assert.equal(arena.counts[player.slot], 0);
 });
 
-test('dua pemain menuju sel yang sama, dua-duanya mati', () => {
+test('two players entering the same cell both die', () => {
   const arena = new Arena();
   const a = seat(arena, 'p1', 20, 50);
   const b = seat(arena, 'p2', 30, 50);
@@ -98,53 +98,53 @@ test('dua pemain menuju sel yang sama, dua-duanya mati', () => {
 
   assert.equal(a.alive, false);
   assert.equal(b.alive, false);
-  assert.equal(a.kills, 0, 'tabrakan kepala tidak dihitung sebagai kill');
+  assert.equal(a.kills, 0, 'a head-on collision is nobody-s kill');
   assert.equal(b.kills, 0);
 });
 
-test('di dalam wilayah sendiri boleh langsung balik arah', () => {
+test('inside your own land you may reverse straight away', () => {
   const arena = new Arena();
-  const player = seat(arena, 'p1', 50, 50); // spawn menghadap ruang terlapang
+  const player = seat(arena, 'p1', 50, 50); // spawns facing the roomiest side
 
   arena.setDir('p1', 3);
   arena.step();
 
-  assert.equal(player.dir, 3, 'pemain baru spawn harus bisa ke segala arah');
+  assert.equal(player.dir, 3, 'a fresh spawn must be able to go any direction');
   assert.equal(player.x, 49);
 });
 
-test('balik badan diabaikan saat sedang menyeret jejak', () => {
+test('reversing is ignored while dragging a trail', () => {
   const arena = new Arena();
   const player = seat(arena, 'p1', 50, 50);
 
-  drive(arena, 'p1', 1, 5); // sampai (55,50), sedang menyeret jejak
+  drive(arena, 'p1', 1, 5); // out to (55,50), trail behind
   assert.equal(player.trailing, true);
 
   arena.setDir('p1', 3);
   arena.step();
 
-  assert.equal(player.dir, 1, 'arah tidak boleh berbalik ke jejak sendiri');
+  assert.equal(player.dir, 1, 'must not turn back onto its own trail');
   assert.equal(player.x, 56);
   assert.equal(player.alive, true);
 });
 
-test('pemain yang putus koneksi menahan wilayahnya, lalu dilepas setelah masa tenggang', () => {
+test('a dropped connection holds the land, then releases it after the grace period', () => {
   const arena = new Arena();
   const player = seat(arena, 'p1', 50, 50);
   const slot = player.slot;
 
   arena.disconnect('p1');
   arena.step();
-  assert.equal(arena.counts[slot], 25, 'wilayah harus bertahan selama masa tenggang');
+  assert.equal(arena.counts[slot], 25, 'land survives the grace period');
   assert.equal(arena.players.size, 1);
 
   for (let i = 0; i < DISCONNECT_GRACE_TICKS + 1; i++) arena.step();
 
-  assert.equal(arena.players.size, 0, 'pemain dibuang setelah masa tenggang habis');
+  assert.equal(arena.players.size, 0, 'the player is dropped once grace runs out');
   assert.equal(arena.counts[slot], 0);
 });
 
-test('reconnect memakai id yang sama melanjutkan wilayah yang lama', () => {
+test('reconnecting with the same id resumes the old territory', () => {
   const arena = new Arena();
   const before = seat(arena, 'p1', 50, 50);
   arena.disconnect('p1');
@@ -157,13 +157,13 @@ test('reconnect memakai id yang sama melanjutkan wilayah yang lama', () => {
   assert.equal(arena.counts[before.slot], 25);
 });
 
-test('arena menolak pemain ke-13', () => {
+test('the arena turns away a thirteenth player', () => {
   const arena = new Arena();
   for (let i = 0; i < 12; i++) assert.ok(arena.join(`p${i}`, `p${i}`));
   assert.equal(arena.join('p12', 'p12'), null);
 });
 
-test('run-length encoding bolak-balik menghasilkan grid yang sama', () => {
+test('run-length encoding round trips the grid unchanged', () => {
   const arena = new Arena();
   seat(arena, 'p1', 30, 30);
   seat(arena, 'p2', 70, 70);
@@ -174,10 +174,10 @@ test('run-length encoding bolak-balik menghasilkan grid yang sama', () => {
   assert.deepEqual([...restored], [...arena.owner]);
 });
 
-test('snapshot memulihkan wilayah, jejak, dan posisi', () => {
+test('a snapshot restores land, trails and positions', () => {
   const arena = new Arena();
   const player = seat(arena, 'p1', 50, 50);
-  drive(arena, 'p1', 1, 5); // tinggalkan jejak
+  drive(arena, 'p1', 1, 5); // leave a trail behind
 
   const restored = Arena.fromSnapshot(JSON.parse(JSON.stringify(arena.snapshot())));
   const copy = restored.players.get('p1');
@@ -189,31 +189,31 @@ test('snapshot memulihkan wilayah, jejak, dan posisi', () => {
   assert.equal(restored.counts[player.slot], arena.counts[player.slot]);
   assert.deepEqual([...restored.getTrail(player.slot)], [...arena.getTrail(player.slot)]);
 
-  // Lanjut bermain dari snapshot harus tetap bisa merebut wilayah.
+  // Play must continue from a snapshot, capture included.
   drive(restored, 'p1', 2, 3);
   drive(restored, 'p1', 3, 5);
   drive(restored, 'p1', 0, 1);
   assert.ok(restored.counts[player.slot] > 25);
 });
 
-test('spawn menghadap sisi paling lapang, bukan selalu ke kanan', () => {
+test('spawns face the roomiest side rather than always facing right', () => {
   const arena = new Arena();
 
-  const kanan = seat(arena, 'p1', 95, 50); // mepet tepi kanan
-  assert.equal(kanan.dir, 3, 'harus menghadap kiri, menjauhi dinding');
+  const right = seat(arena, 'p1', 95, 50); // hard against the right wall
+  assert.equal(right.dir, 3, 'should face left, away from the wall');
 
-  const kiri = seat(arena, 'p2', 4, 50); // mepet tepi kiri
-  assert.equal(kiri.dir, 1, 'harus menghadap kanan');
+  const left = seat(arena, 'p2', 4, 50);
+  assert.equal(left.dir, 1, 'should face right');
 
-  const atas = seat(arena, 'p3', 50, 4); // mepet tepi atas
-  assert.equal(atas.dir, 2, 'harus menghadap bawah');
+  const top = seat(arena, 'p3', 50, 4);
+  assert.equal(top.dir, 2, 'should face down');
 });
 
-test('pemain di tepi tidak mati sendiri sebelum sempat berbelok', () => {
+test('a player spawned at the edge survives long enough to turn', () => {
   const arena = new Arena();
   const player = seat(arena, 'p1', 96, 50);
 
   for (let i = 0; i < 30; i++) arena.step();
 
-  assert.equal(player.alive, true, 'harus punya cukup ruang untuk 3 detik pertama');
+  assert.equal(player.alive, true, 'needs room for the first three seconds');
 });
