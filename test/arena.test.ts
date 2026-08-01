@@ -217,3 +217,86 @@ test('a player spawned at the edge survives long enough to turn', () => {
 
   assert.equal(player.alive, true, 'needs room for the first three seconds');
 });
+
+test('land cut off from the player is released', () => {
+  const arena = new Arena();
+  const player = seat(arena, 'p1', 20, 50); // block A: x 18..22, y 48..52
+  arena.spawnAt('p1', 60, 50); // block B: x 58..62, y 48..52, player moves there
+  assert.equal(arena.counts[player.slot], 50, 'two separate blocks to start with');
+
+  // A neighbour lands on top of block A and bites a piece out of it, which
+  // leaves the rest of A stranded from the player standing over in block B.
+  seat(arena, 'p2', 20, 47);
+  arena.step();
+
+  assert.equal(arena.counts[player.slot], 25, 'only the piece under the player survives');
+  assert.equal(arena.owner[at(20, 52)], -1, 'the stranded island is released');
+  assert.equal(arena.owner[at(60, 50)], player.slot, 'the piece being stood on stays');
+  assert.equal(player.alive, true);
+});
+
+test('with the player away from home the largest piece survives', () => {
+  const arena = new Arena();
+  const player = seat(arena, 'p1', 30, 30);
+  arena.spawnAt('p1', 70, 70);
+  // Walk off the block so the player is standing on no land of their own.
+  drive(arena, 'p1', 0, 4);
+  assert.equal(player.trailing, true);
+
+  // Take two cells out of the far block so both pieces need re-checking.
+  seat(arena, 'p2', 30, 27);
+  arena.step();
+
+  const survivors = [...arena.owner].filter((slot) => slot === player.slot).length;
+  assert.equal(survivors, arena.counts[player.slot]);
+  assert.ok(survivors > 0, 'one piece must survive');
+  assert.equal(arena.owner[at(70, 70)], player.slot, 'the bigger untouched block is kept');
+});
+
+test('losing the last of your land is fatal', () => {
+  const arena = new Arena();
+  const victim = seat(arena, 'p1', 50, 50);
+  arena.disconnect('p1'); // hold still so this tests land loss, not a crash
+
+  const raider = seat(arena, 'p2', 45, 45);
+  drive(arena, 'p2', 1, 11); // right to x=56
+  drive(arena, 'p2', 2, 11); // down to y=56
+  drive(arena, 'p2', 3, 12); // left to x=44
+  drive(arena, 'p2', 0, 9); // up to y=47, back home — encloses the victim
+
+  assert.ok(arena.counts[raider.slot] > 25, 'the raider claimed the enclosed ground');
+  assert.equal(arena.counts[victim.slot], 0);
+  assert.equal(victim.alive, false, 'a player with no land cannot bank a trail again');
+});
+
+test('death events report what actually happened', () => {
+  const wall = new Arena();
+  seat(wall, 'p1', 2, 50);
+  wall.setDir('p1', 3);
+  wall.step();
+  wall.step();
+  assert.equal(wall.step().deaths[0]?.cause, 'wall');
+
+  const crash = new Arena();
+  seat(crash, 'p1', 20, 50);
+  seat(crash, 'p2', 30, 50);
+  crash.setDir('p1', 1);
+  crash.setDir('p2', 3);
+  for (let i = 0; i < 4; i++) crash.step();
+  const collision = crash.step();
+  assert.equal(collision.deaths.length, 2);
+  assert.ok(collision.deaths.every((d) => d.cause === 'crash'));
+
+  const cut = new Arena();
+  const hunted = seat(cut, 'p1', 20, 20);
+  drive(cut, 'p1', 1, 6);
+  const hunter = seat(cut, 'p2', 26, 24);
+  cut.setDir('p2', 0);
+  cut.step();
+  cut.step();
+  cut.step();
+  const stab = cut.step();
+  assert.equal(stab.deaths[0]?.slot, hunted.slot);
+  assert.equal(stab.deaths[0]?.cause, 'trail');
+  assert.equal(stab.deaths[0]?.killer, hunter.slot);
+});

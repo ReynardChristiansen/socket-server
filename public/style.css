@@ -1,7 +1,6 @@
 /* Dark only, on purpose: on a light arena the player colours stop being distinct. */
 :root {
   --bg: #08080c;
-  --bg-soft: #0f1018;
   --line: rgba(255, 255, 255, 0.09);
   --panel: rgba(255, 255, 255, 0.05);
   --text: #f4f4f6;

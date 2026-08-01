@@ -47,3 +47,6 @@ coverage/
 
 # Hasil kompilasi tes
 .build-test/
+
+# Local dev bundle
+.dev-server.cjs

@@ -123,6 +123,10 @@ npm test
 - Get back onto your own land and the trail becomes yours, **along with
   everything it enclosed**
 - Touching a trail kills **its owner**, not whoever touched it
+- Land cut off from the piece you are standing on is lost — carve through
+  someone's territory and the far side of the cut goes back to neutral rather
+  than leaving them islands they can never reach
+- Losing your last cell is fatal: with no land there is no trail to bank
 - Your own trail, the arena edge and head-on collisions are all fatal
 - Dying releases all your land; you respawn three seconds later
 - Reversing is only blocked while you are dragging a trail
@@ -130,6 +134,12 @@ npm test
 Capture is computed backwards: flood the arena inward from its edges, and
 whatever the flood never reaches must be enclosed. One flood fill over the whole
 grid, roughly 0.1 ms.
+
+The connectivity rule runs on the same idea. Anyone who lost ground during a tick
+has their territory split into orthogonally connected pieces; the piece holding
+the player survives, or the largest one if they are out on a trail, and the rest
+is released. It only runs for players who actually lost cells, so a quiet tick
+costs nothing.
 
 ## Controls
 

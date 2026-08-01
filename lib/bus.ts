@@ -42,20 +42,6 @@ export async function subscribe(channel: string, handler: Handler): Promise<void
   set.add(handler);
 }
 
-export async function unsubscribe(channel: string, handler: Handler): Promise<void> {
-  const set = handlers.get(channel);
-  if (!set) return;
-
-  set.delete(handler);
-  if (set.size > 0) return;
-
-  handlers.delete(channel);
-  if (redisEnabled) {
-    const sub = await getSubscriber();
-    await sub.unsubscribe(channel);
-  }
-}
-
 /**
  * The only route messages take between users. The receiving instance publishes
  * to Redis, and every instance — including this one — gets it back through its

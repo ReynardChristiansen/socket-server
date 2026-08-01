@@ -33,13 +33,15 @@ export type Player = {
   respawnTick: number;
   kills: number;
   deaths: number;
-  best: number;
 };
+
+/** Why a player died, so the client can say something more useful than "you died". */
+export type DeathCause = 'wall' | 'crash' | 'trail' | 'land';
 
 export type ArenaEvents = {
   captures: { slot: number; cells: number[] }[];
   spawns: { slot: number; cells: number[] }[];
-  deaths: { slot: number; killer: number | null }[];
+  deaths: { slot: number; killer: number | null; cause: DeathCause }[];
   /** Cells that went back to neutral, from a death or a player leaving. */
   freed: number[];
   /** Slots whose trail the client should erase. */
@@ -110,6 +112,9 @@ export class Arena {
   private readonly floodSeen = new Uint8Array(GRID_SIZE);
   private readonly floodStack = new Int32Array(GRID_SIZE);
 
+  /** Slots that lost ground this tick and therefore need re-checking. */
+  private readonly victims = new Set<number>();
+
   get playerCount(): number {
     return this.players.size;
   }
@@ -147,7 +152,6 @@ export class Arena {
       respawnTick: this.tick,
       kills: 0,
       deaths: 0,
-      best: 0,
     };
     this.players.set(id, player);
     this.bySlot[slot] = player;
@@ -190,7 +194,7 @@ export class Arena {
 
     const moving: Player[] = [];
     const nextIdx = new Map<number, number>();
-    const dying = new Map<number, number | null>();
+    const dying = new Map<number, { killer: number | null; cause: DeathCause }>();
 
     for (const player of this.players.values()) {
       if (!player.alive || player.frozen) continue;
@@ -207,7 +211,7 @@ export class Arena {
       const nx = player.x + DX[player.dir];
       const ny = player.y + DY[player.dir];
       if (nx < 0 || ny < 0 || nx >= GRID_W || ny >= GRID_H) {
-        dying.set(player.slot, null);
+        dying.set(player.slot, { killer: null, cause: 'wall' });
         continue;
       }
       nextIdx.set(player.slot, ny * GRID_W + nx);
@@ -221,27 +225,20 @@ export class Arena {
       else occupants.set(idx, [slot]);
     }
     for (const [, slots] of occupants) {
-      if (slots.length > 1) for (const slot of slots) dying.set(slot, null);
+      if (slots.length > 1) {
+        for (const slot of slots) dying.set(slot, { killer: null, cause: 'crash' });
+      }
     }
 
     // Touching a trail kills the trail's owner, not whoever touched it.
     for (const [slot, idx] of nextIdx) {
       if (dying.has(slot)) continue;
       const victim = this.trail[idx];
-      if (victim >= 0) dying.set(victim, victim === slot ? null : slot);
+      if (victim < 0 || dying.has(victim)) continue;
+      dying.set(victim, { killer: victim === slot ? null : slot, cause: 'trail' });
     }
 
-    for (const [slot, killer] of dying) {
-      const player = this.bySlot[slot];
-      if (!player || !player.alive) continue;
-      if (killer !== null) {
-        const hunter = this.bySlot[killer];
-        if (hunter) hunter.kills++;
-      }
-      events.freed.push(...this.killPlayer(player));
-      events.deaths.push({ slot, killer });
-      events.clearTrails.push(slot);
-    }
+    for (const [slot, death] of dying) this.recordDeath(events, slot, death.killer, death.cause);
 
     for (const player of moving) {
       if (dying.has(player.slot)) continue;
@@ -263,11 +260,51 @@ export class Arena {
         this.trailCells[player.slot].push(idx);
         player.trailing = true;
       }
-
-      if (this.counts[player.slot] > player.best) player.best = this.counts[player.slot];
     }
 
+    this.settleVictims(events);
+
     return events;
+  }
+
+  /**
+   * Anyone who lost ground this tick gets their territory re-checked: islands
+   * cut off from their body are released, and losing the last cell is fatal —
+   * a player with no land can never bank a trail again.
+   */
+  private settleVictims(events: ArenaEvents): void {
+    if (this.victims.size === 0) return;
+
+    for (const slot of this.victims) {
+      const player = this.bySlot[slot];
+      if (!player) continue;
+
+      const orphaned = this.pruneDetached(player);
+      if (orphaned.length > 0) events.freed.push(...orphaned);
+
+      if (this.counts[slot] === 0 && player.alive) {
+        this.recordDeath(events, slot, null, 'land');
+      }
+    }
+    this.victims.clear();
+  }
+
+  private recordDeath(
+    events: ArenaEvents,
+    slot: number,
+    killer: number | null,
+    cause: DeathCause,
+  ): void {
+    const player = this.bySlot[slot];
+    if (!player || !player.alive) return;
+
+    if (killer !== null) {
+      const hunter = this.bySlot[killer];
+      if (hunter) hunter.kills++;
+    }
+    events.freed.push(...this.killPlayer(player));
+    events.deaths.push({ slot, killer, cause });
+    events.clearTrails.push(slot);
   }
 
   private expireDisconnected(events: ArenaEvents): void {
@@ -384,9 +421,83 @@ export class Arena {
   private setOwner(idx: number, slot: number): void {
     const prev = this.owner[idx];
     if (prev === slot) return;
-    if (prev >= 0) this.counts[prev]--;
+    if (prev >= 0) {
+      this.counts[prev]--;
+      this.victims.add(prev);
+    }
     this.owner[idx] = slot;
     this.counts[slot]++;
+  }
+
+  /**
+   * Land no longer connected to the piece the player is standing on is lost.
+   * Cutting through someone's territory should cost them the far side of the
+   * cut, not leave them holding islands they can never reach again.
+   *
+   * Connectivity is orthogonal: corners touching diagonally count as separate.
+   * When the player is out on a trail and not standing on their own ground, the
+   * largest piece is the one that survives.
+   */
+  private pruneDetached(player: Player): number[] {
+    const slot = player.slot;
+    if (this.counts[slot] === 0) return [];
+
+    const seen = this.floodSeen;
+    const stack = this.floodStack;
+    seen.fill(0);
+
+    const anchor = player.y * GRID_W + player.x;
+    const anchored = this.owner[anchor] === slot;
+    const pieces: { cells: number[]; holdsAnchor: boolean }[] = [];
+
+    for (let start = 0; start < GRID_SIZE; start++) {
+      if (this.owner[start] !== slot || seen[start]) continue;
+
+      const cells: number[] = [];
+      let top = 0;
+      let holdsAnchor = false;
+
+      const push = (idx: number): void => {
+        if (seen[idx] || this.owner[idx] !== slot) return;
+        seen[idx] = 1;
+        stack[top++] = idx;
+      };
+
+      push(start);
+      while (top > 0) {
+        const idx = stack[--top];
+        cells.push(idx);
+        if (idx === anchor) holdsAnchor = true;
+        const x = idx % GRID_W;
+        const y = (idx / GRID_W) | 0;
+        if (x > 0) push(idx - 1);
+        if (x < GRID_W - 1) push(idx + 1);
+        if (y > 0) push(idx - GRID_W);
+        if (y < GRID_H - 1) push(idx + GRID_W);
+      }
+      pieces.push({ cells, holdsAnchor });
+    }
+
+    if (pieces.length <= 1) return [];
+
+    let keep = pieces.findIndex((piece) => anchored && piece.holdsAnchor);
+    if (keep < 0) {
+      keep = pieces.reduce(
+        (best, piece, i) => (piece.cells.length > pieces[best].cells.length ? i : best),
+        0,
+      );
+    }
+
+    const freed: number[] = [];
+    for (let i = 0; i < pieces.length; i++) {
+      if (i === keep) continue;
+      for (const idx of pieces[i].cells) {
+        this.owner[idx] = -1;
+        this.counts[slot]--;
+        freed.push(idx);
+      }
+    }
+    return freed;
   }
 
   /**

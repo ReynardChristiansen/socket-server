@@ -5,14 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { redisEnabled } from '../lib/redis';
 import * as match from '../lib/game/match';
 import type { Dir } from '../lib/game/arena';
-import {
-  COLORS,
-  GRID_H,
-  GRID_W,
-  MAX_NAME_LENGTH,
-  MAX_PLAYERS,
-  TICK_MS,
-} from '../lib/game/constants';
+import { COLORS, GRID_H, GRID_W, MAX_NAME_LENGTH, MAX_PLAYERS } from '../lib/game/constants';
 
 const PING_INTERVAL_MS = 30_000;
 /** Turn rate cap, so a misbehaving client cannot burn through Redis quota. */
@@ -94,7 +87,6 @@ function handleJoin(client: Client, payload: Record<string, unknown>): void {
     k: 'welcome',
     id: playerId,
     grid: { w: GRID_W, h: GRID_H },
-    tickMs: TICK_MS,
     colors: COLORS,
     maxPlayers: MAX_PLAYERS,
   });

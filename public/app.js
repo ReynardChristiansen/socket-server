@@ -35,7 +35,6 @@ const DIR_KEYS = {
 const S = {
   w: 0,
   h: 0,
-  tickMs: 100,
   colors: [],
   rgb: [],
   trailColors: [],
@@ -206,7 +205,6 @@ function handle(msg) {
     case 'welcome':
       S.myId = msg.id;
       localStorage.setItem('territory:id', msg.id);
-      S.tickMs = msg.tickMs;
       S.colors = msg.colors;
       S.rgb = msg.colors.map(hexToRgb);
       S.trailColors = msg.colors.map((c) => lighten(c, 0.5));
@@ -642,6 +640,20 @@ function startPlaying() {
   if (matchMedia('(pointer: coarse)').matches) $('stick').hidden = false;
 }
 
+function deathReason(death) {
+  const culprit = death.killer !== null ? S.names.get(death.killer) || 'Someone' : null;
+  switch (death.cause) {
+    case 'wall':
+      return 'You drove into the edge of the arena.';
+    case 'crash':
+      return 'You ran head-on into another player.';
+    case 'land':
+      return 'Your last piece of ground was taken.';
+    default:
+      return culprit ? `${culprit} cut your trail.` : 'You crossed your own trail.';
+  }
+}
+
 function onDeath(death) {
   if (death.slot !== S.mySlot) return;
   const total = S.w * S.h;
@@ -649,10 +661,7 @@ function onDeath(death) {
 
   $('deadScore').textContent = `${((S.myBest / total) * 100).toFixed(2)}%`;
   $('deadKills').textContent = String(me?.kills ?? 0);
-  $('deadReason').textContent =
-    death.killer !== null && death.killer !== S.mySlot
-      ? `${S.names.get(death.killer) || 'Someone'} cut your trail.`
-      : 'Your trail was broken.';
+  $('deadReason').textContent = deathReason(death);
 
   S.myBest = 0;
   deadUntil = performance.now() + 3000;
