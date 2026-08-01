@@ -1,106 +1,150 @@
-# socket-project
+# Territory
 
-Chat server WebSocket di Vercel Functions. Pakai `ws` + Redis pub/sub.
+Game rebut wilayah multiplayer realtime — ala paper.io — dengan server otoritatif
+10 tick per detik yang jalan di Vercel Functions.
+
+Keluar dari wilayahmu, lingkari tanah kosong, lalu pulang untuk merebutnya. Kalau ada
+yang menyentuh jejakmu sebelum kamu sampai rumah, kamu kehilangan semuanya.
+
+## Kenapa ini tidak sesederhana kelihatannya
+
+Vercel Functions bukan server yang hidup selamanya. Tiga batasannya bertabrakan
+langsung dengan kebutuhan sebuah game realtime, dan itu yang membentuk arsitektur di sini:
+
+**Koneksi baru bisa mendarat di instance mana pun.** Dua pemain di arena yang sama belum
+tentu dilayani proses yang sama, jadi tidak ada satu pun proses yang otomatis memegang
+kebenaran tentang isi arena.
+
+**Function mati saat mencapai max duration, 300 detik.** Simulasi tidak boleh ikut mati
+bersamanya.
+
+**Koneksi pemain ikut putus saat itu terjadi.** Jadi putus koneksi bukan kasus langka
+yang boleh diabaikan — itu kejadian rutin tiap lima menit.
+
+## Cara kerjanya
+
+Satu instance memegang kunci di Redis dan menjadi **leader**. Hanya dia yang menjalankan
+simulasi. Instance lain tidak ikut menghitung apa pun — mereka cuma meneruskan input
+pemainnya ke leader, lalu menyiarkan hasil yang datang balik ke socket miliknya sendiri.
+
+```
+pemain ─► instance A ─┐                        ┌─► instance A ─► pemain
+                      ├─► arena:in ─► LEADER ──┤
+pemain ─► instance B ─┘                simulasi└─► instance B ─► pemain
+                                       10 Hz         arena:out
+```
+
+Kunci leader berumur 3 detik dan diperpanjang tiap detik. Kalau instance pemegangnya kena
+max duration, kuncinya kedaluwarsa sendiri, instance lain mengambil alih, memuat snapshot
+terakhir dari Redis, lalu meneruskan pertandingan. Pemain merasakan tersendat sekitar satu
+detik, bukan kehilangan arena.
+
+Saat leader baru terpilih, dia menyiarkan `need-roster`. Setiap instance menjawab dengan
+mendaftarkan ulang pemain yang socketnya dia pegang — ini yang menutup celah pemain yang
+join tepat saat arena sedang tanpa leader.
+
+**Putus koneksi tidak langsung menghapus pemain.** Wilayahnya ditahan 12 detik. Karena
+client menyimpan id-nya di `localStorage` dan mengirimnya lagi saat reconnect, pemain yang
+koneksinya diputus oleh max duration akan kembali ke wilayah yang sama. Dari sisi pemain,
+game-nya tidak terasa terputus.
+
+**Arena kosong berhenti berdetak.** Tidak ada pemain berarti tidak ada tick, tidak ada
+command Redis, dan kunci leader dilepas. Kuota tidak terbakar saat tidak ada yang main.
+
+## Apa yang dikirim tiap tick
+
+Grid 100×100 itu 10.000 sel. Mengirim seluruhnya 10 kali per detik akan menghabiskan
+puluhan megabit per menit, jadi yang disiarkan cuma yang berubah:
+
+| Isi | Kapan dikirim |
+|---|---|
+| Posisi, arah, skor semua pemain | tiap tick (~12 baris angka) |
+| Sel yang baru direbut | hanya saat ada yang merebut |
+| Sel yang jadi netral | hanya saat ada yang mati |
+| Grid penuh (RLE) | sekali, saat pemain masuk atau reconnect |
+
+Jejak tidak dikirim sama sekali. Client menyusunnya sendiri: kalau posisi pemain berada di
+sel yang bukan miliknya, itu jejak. Server cukup memberi tahu kapan jejak harus dihapus.
 
 ## Struktur
 
 ```
-api/ws.ts           WebSocket server — export instance http.Server
-lib/redis.ts        koneksi Redis (client untuk command/publish + subscriber terpisah)
-lib/bus.ts          pub/sub antar instance, satu-satunya jalur broadcast
-lib/rooms.ts        presence & message history di Redis
-public/index.html   client chat: origin-relative URL + reconnect exponential backoff
-vercel.json         maxDuration 300 detik
+lib/game/arena.ts       simulasi murni — gerak, tabrakan, rebut wilayah. Tanpa jaringan.
+lib/game/match.ts       pemilihan leader, game loop, snapshot, papan rekor
+lib/game/constants.ts   ukuran arena, tick rate, warna, kunci Redis
+lib/bus.ts              pub/sub antar instance lewat Redis
+lib/redis.ts            koneksi command dan koneksi subscriber terpisah
+api/ws.ts               WebSocket server — export instance http.Server
+public/                 client: canvas, HUD, kontrol sentuh
+test/arena.test.ts      15 tes untuk aturan permainan
 ```
 
-## Protokol
+`arena.ts` sengaja tidak tahu apa-apa soal jaringan maupun Redis. Semua aturan permainan
+bisa diuji tanpa menyalakan server:
 
-Client → server:
-
-```jsonc
-{ "type": "join", "room": "general", "user": "rey" }
-{ "type": "chat", "text": "halo" }
-{ "type": "ping" }
+```bash
+npm test
 ```
 
-Server → client:
+## Aturan permainan
 
-```jsonc
-{ "type": "welcome", "connectionId": "...", "redis": true, "maxDurationSeconds": 300 }
-{ "type": "joined", "room": "general", "user": "rey", "connectionId": "..." }
-{ "type": "history", "room": "general", "messages": [ /* 50 pesan terakhir */ ] }
-{ "type": "chat", "id": "...", "room": "general", "user": "rey", "text": "halo", "ts": 0 }
-{ "type": "presence", "room": "general", "members": ["rey", "budi"] }
-{ "type": "system", "room": "general", "text": "budi bergabung", "ts": 0 }
-{ "type": "error", "text": "..." }
-```
+- Petak awal 5×5, menghadap sisi arena yang paling lapang
+- Di luar wilayah sendiri, pemain meninggalkan jejak
+- Kembali ke wilayah sendiri → jejak jadi milikmu, dan **semua yang terkurung ikut direbut**
+- Menyentuh jejak seseorang membunuh **pemilik jejaknya**, bukan yang menyentuh
+- Menabrak jejak sendiri, tepi arena, atau bertabrakan kepala-lawan-kepala juga mematikan
+- Yang mati kehilangan seluruh wilayahnya dan lahir kembali 3 detik kemudian
+- Balik badan 180° hanya dilarang saat sedang menyeret jejak
 
-`join` sekaligus berfungsi sebagai resubscribe + reload state, jadi client cukup
-mengirim ulang `join` setiap kali reconnect.
+Perebutan wilayah dihitung terbalik: banjiri arena dari tepi, apa pun yang tidak tersentuh
+berarti terkurung. Satu kali flood fill untuk seluruh grid, sekitar 0,1 ms.
+
+## Kontrol
+
+Papan ketik `WASD` atau tombol panah. Di layar sentuh, geser di mana saja — joystick muncul
+di titik sentuh.
 
 ## Jalan lokal
 
 ```bash
 npm install
-cp .env.example .env.local        # isi REDIS_URL
+npm test
 
 npm i -g vercel
 vercel link
-vercel dev                        # http://localhost:3000
+vercel dev            # http://localhost:3000
 ```
 
-Redis lokal (opsional tapi disarankan, tanpa ini presence & history kosong):
+Redis lokal opsional untuk dev satu proses. Tanpa `REDIS_URL`, arena tetap jalan di satu
+proses tanpa pemilihan leader dan tanpa papan rekor.
 
 ```bash
-docker run -d -p 6379:6379 --name socket-redis redis
+docker run -d -p 6379:6379 --name territory-redis redis
 # REDIS_URL=redis://localhost:6379 di .env.local
-```
-
-Cek cepat dari terminal:
-
-```bash
-curl http://localhost:3000/api/ws          # health check, lihat "redis": true
-npx wscat -c ws://localhost:3000/api/ws
-> {"type":"join","room":"general","user":"rey"}
-> {"type":"chat","text":"halo"}
 ```
 
 ## Deploy
 
 1. **Fluid compute harus aktif** (Settings → Functions). Tanpa ini WebSocket tidak jalan.
-   Default untuk project yang dibuat sejak 23 April 2025.
-2. Tambahkan Redis lewat Vercel Marketplace (Storage → Redis), connect ke project ini.
-   Pastikan env var-nya bernama `REDIS_URL`.
-3. Deploy:
+2. Tambahkan Redis dari Vercel Marketplace, connect ke project. Kode membaca `REDIS_URL`
+   atau `KV_URL`.
+3. Taruh Redis di region yang sama dengan function. Simulasi menyentuh Redis 10 kali per
+   detik; kalau keduanya beda benua, game-nya terasa berat.
+4. `vercel --prod`
 
-```bash
-vercel              # preview
-vercel --prod       # production
-```
+Cek cepat: `curl https://<domain>/api/ws` — akan menampilkan `redis`, jumlah koneksi
+lokal, dan siapa leader-nya.
 
-4. Tes di preview deployment, bukan cuma localhost:
+## Konsumsi kuota
 
-```bash
-npx wscat -c wss://<preview-url>/api/ws
-```
+Sekitar 40.000 command Redis per jam saat arena ramai, jadi free tier Upstash (500.000
+command per bulan) cukup untuk kira-kira 12 jam pertandingan. Arena kosong tidak memakan
+apa pun. Kalau perlu lebih hemat, turunkan tick rate di `lib/game/constants.ts` atau
+perjarang snapshot.
 
-Debug: `vercel logs <deployment-url> --follow`
+## Catatan teknis
 
-## Yang perlu diingat
-
-- Koneksi putus tiap 300 detik karena max duration. Itu normal — client sudah punya
-  reconnect + exponential backoff (1s → 30s). Naikkan `maxDuration` di `vercel.json`
-  kalau perlu (maks 800 detik di Pro/Enterprise).
-- Semua broadcast lewat Redis pub/sub. `roomClients` di `api/ws.ts` cuma tabel
-  pengiriman lokal per instance, bukan shared state.
-- Presence pakai sorted set + timestamp, di-refresh tiap 10 detik dan entri yang lebih
-  tua dari 30 detik dibuang. Jadi koneksi yang mati mendadak (instance kena max duration
-  atau deployment diganti) tidak meninggalkan user hantu di daftar online.
-- Tanpa `REDIS_URL` server tetap jalan untuk dev satu proses, tapi presence dan history
-  kosong dan broadcast tidak menyeberang antar instance. Server mencetak warning saat start
-  dan `redis: false` muncul di health check.
-
-## Kalau ternyata cuma butuh satu arah
-
-Kalau fiturnya cuma server → client (notifikasi, progress bar, streaming AI), SSE lebih
-sederhana dan lebih cocok daripada WebSocket. Lihat bagian "Catatan" di `CLAUDE.md`.
+`tsconfig.json` memakai `module: Node16`. Setelan gaya bundler (`ESNext` +
+`moduleResolution: Bundler`) membuat seluruh function gagal dimuat di Vercel dengan
+`FUNCTION_INVOCATION_FAILED`, karena hasil kompilasinya keluar sebagai ESM sementara
+runtime memuatnya sebagai CommonJS.

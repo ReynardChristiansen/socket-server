@@ -1,0 +1,539 @@
+/* Game ini sengaja gelap saja — arena terang membuat warna pemain sulit dibedakan. */
+:root {
+  --bg: #08080c;
+  --bg-soft: #0f1018;
+  --line: rgba(255, 255, 255, 0.09);
+  --panel: rgba(255, 255, 255, 0.05);
+  --text: #f4f4f6;
+  --muted: #8b8b9a;
+  --accent: #38bdf8;
+  --danger: #f43f5e;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --radius: 16px;
+  --pad: clamp(10px, 2.2vw, 16px);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Aturan `display` di kelas mengalahkan [hidden] bawaan browser karena
+   specificity-nya sama tapi berasal dari author stylesheet. Tanpa baris ini,
+   overlay dan HUD yang disembunyikan lewat atribut hidden tetap tampil. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  background: radial-gradient(120% 90% at 50% 0%, #14172a 0%, var(--bg) 60%);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  user-select: none;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+/* ------------------------------------------------------------------ panel */
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  padding: var(--pad);
+}
+
+.hud {
+  position: fixed;
+  inset: 0;
+  padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  pointer-events: none;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-rows: auto 1fr auto;
+  gap: 12px;
+}
+
+.panel-score {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 150px;
+}
+
+.score-value {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+  font-size: clamp(26px, 5vw, 38px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.score-value .unit {
+  font-size: 0.5em;
+  color: var(--muted);
+}
+
+.score-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dot-sep {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+.panel-board {
+  grid-column: 3;
+  grid-row: 1;
+  min-width: 180px;
+  max-width: 240px;
+}
+
+.panel-board h2,
+.best h2 {
+  margin: 0 0 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.board {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 13px;
+}
+
+.board li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.board li.me {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.board li.gone {
+  opacity: 0.45;
+}
+
+.board .swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+}
+
+.board .who {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board .val {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.board li.me .val {
+  color: inherit;
+}
+
+.board .empty {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.panel-map {
+  grid-column: 1;
+  grid-row: 3;
+  /* Tanpa ini panel ikut melebar mengikuti kolom, jadi jauh lebih besar
+     daripada peta di dalamnya. */
+  justify-self: start;
+  align-self: end;
+  padding: 8px;
+  line-height: 0;
+}
+
+#minimap {
+  width: clamp(76px, 14vw, 120px);
+  height: clamp(76px, 14vw, 120px);
+  border-radius: 8px;
+  image-rendering: pixelated;
+}
+
+.status {
+  grid-column: 3;
+  grid-row: 3;
+  align-self: end;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.status .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  transition: background 0.2s;
+}
+
+.status.online .dot {
+  background: var(--ok);
+}
+
+.status.offline .dot {
+  background: var(--danger);
+}
+
+/* --------------------------------------------------------------- overlay */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(6, 6, 10, 0.82);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 10;
+  overflow-y: auto;
+}
+
+.card {
+  width: min(420px, 100%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: clamp(20px, 5vw, 30px);
+  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.9);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), #6366f1);
+  box-shadow: 0 0 24px rgba(56, 189, 248, 0.45);
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: clamp(22px, 5vw, 27px);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.tagline {
+  margin: 14px 0 20px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.join {
+  display: flex;
+  gap: 9px;
+}
+
+input[type='text'] {
+  flex: 1;
+  min-width: 0;
+  padding: 12px 14px;
+  font: inherit;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+input[type='text']::placeholder {
+  color: #5b5b6b;
+}
+
+input[type='text']:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button {
+  padding: 12px 22px;
+  font: inherit;
+  font-weight: 650;
+  color: #04121c;
+  background: var(--accent);
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: transform 0.12s, filter 0.12s;
+}
+
+button:hover {
+  filter: brightness(1.08);
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.start-error {
+  margin: 12px 0 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.how {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 18px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.how-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.keys {
+  display: inline-flex;
+  gap: 3px;
+}
+
+kbd,
+.pill {
+  display: inline-grid;
+  place-items: center;
+  min-width: 21px;
+  height: 21px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.best {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.board-best li .val {
+  font-weight: 600;
+}
+
+/* Petunjuk kontrol menyesuaikan perangkat, bukan lebar layar. */
+.how-touch {
+  display: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .how-item:not(.how-touch) {
+    display: none;
+  }
+  .how-touch {
+    display: flex;
+  }
+}
+
+/* ------------------------------------------------------------ layar mati */
+
+.overlay-dead {
+  background: rgba(6, 6, 10, 0.6);
+}
+
+.card-dead {
+  width: min(320px, 100%);
+  text-align: center;
+}
+
+.card-dead h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.dead-reason {
+  margin: 6px 0 18px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.dead-stats {
+  display: flex;
+  justify-content: center;
+  gap: 28px;
+  margin-bottom: 16px;
+}
+
+.dead-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dead-stats strong {
+  font-size: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dead-stats span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dead-count {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.dead-count span {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------- joystick */
+
+.stick {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.stick-base,
+.stick-knob {
+  position: absolute;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.stick-base {
+  width: 116px;
+  height: 116px;
+  border: 2px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.stick-knob {
+  width: 50px;
+  height: 50px;
+  background: rgba(56, 189, 248, 0.5);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+.stick.on .stick-base,
+.stick.on .stick-knob {
+  opacity: 1;
+}
+
+/* --------------------------------------------------------------- responsif */
+
+@media (max-width: 560px) {
+  .hud {
+    gap: 8px;
+  }
+  .panel-board {
+    min-width: 0;
+    max-width: 140px;
+    padding: 9px 10px;
+  }
+  .board {
+    font-size: 12px;
+    gap: 4px;
+  }
+  .panel-score {
+    min-width: 0;
+  }
+  /* Peta tetap di kiri bawah, cuma diperkecil. Menaruhnya di tengah atas tidak
+     muat: kolom tengah tersisa ~70px sementara peta butuh 76px. */
+  #minimap {
+    width: 64px;
+    height: 64px;
+  }
+  .status {
+    font-size: 10px;
+    padding: 5px 9px;
+  }
+}
+
+@media (max-height: 460px) and (orientation: landscape) {
+  .panel-map {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+  }
+}

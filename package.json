@@ -2,12 +2,13 @@
   "name": "socket-project",
   "version": "1.0.0",
   "private": true,
-  "description": "WebSocket chat server di Vercel Functions (ws + Redis pub/sub)",
+  "description": "Territory \u2014 game rebut wilayah multiplayer realtime di Vercel Functions (ws + Redis)",
   "scripts": {
     "dev": "vercel dev",
     "typecheck": "tsc --noEmit",
     "deploy": "vercel",
-    "deploy:prod": "vercel --prod"
+    "deploy:prod": "vercel --prod",
+    "test": "tsc --noEmit false --outDir .build-test && node --test \".build-test/test/**/*.test.js\""
   },
   "dependencies": {
     "redis": "^4.7.0",
